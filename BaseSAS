@@ -1,0 +1,154 @@
+*Access Data;
+*1. Import the TSAClaims2002_2017.csv file.;
+
+libname tsa "/home/u41108928";
+
+proc import datafile="/home/u41108928/TSAClaims2002_2017.csv"
+ out= tsa.claims_imported dbms= csv replace;
+ guessingrows=max;
+run;
+
+
+*Explore Data;
+*1. Preview the data.;
+
+proc print data=tsa.claims_imported (obs=20);
+run;
+proc contents data=tsa.claims_imported varnum;
+run;
+
+*2. Explore the columns.;
+
+proc freq data=tsa.claims_imported;
+ tables Claim_Site Disposition Claim_Type / nocum nopercent;
+ tables Date_Received Incident_Date / nocum nopercent;
+ format Date_Received Incident_Date year4.;
+run;
+
+
+*Prepare Data;
+*1. Remove duplicate rows;
+
+proc sort data=tsa.claims_imported
+out=tsa.Claims_NoDups
+nodupkey;
+ by _all_;
+run;
+
+*2. Sort the data by ascending Incident_Date.;
+
+proc sort data=tsa.Claims_NoDups;
+ by Incident_Date;
+run;
+
+*3. Clean the Claim_Site column.;
+
+data tsa.prep1;
+ set tsa.claims_nodups;
+ if Claim_Site in ('-',"") then Claim_Site="Unknown";
+run;
+
+*4. Clean the Disposition column.;
+
+data tsa.prep2;
+ set tsa.prep1;
+ if Disposition in ("-","") then Disposition='Unknown';
+ else if Disposition='Closed: Canceled' then Disposition='Closed:Canceled';
+ else if Disposition='losed: Contractor Claim' then Disposition='Closed:Contractor Claim';
+run;
+
+*5. Clean the Claim_Type column.;
+
+data tsa.prep3;
+ set tsa.prep2;
+ if Claim_Type in ("-","") then Claim_Type="Unknown";
+ else if Claim_Type = 'Passenger Property Loss/Personal Injur' then Claim_Type='Passenger Property Loss';
+ else if Claim_Type = 'Passenger Property Loss/Personal Injury' then Claim_Type='Passenger Property Loss';
+ else if Claim_Type = 'Property Damage/Personal Injury' then Claim_Type='Property Damage';
+run;
+
+*6. Convert all State values to uppercase and all StateName values to proper case.;
+
+data tsa.prep4;
+ set tsa.prep3;
+ State=upcase(state);
+ StateName=propcase(StateName);
+run;
+
+*7. Create a new column that indicates date issues.;
+
+data tsa.prep5;
+ set tsa.prep4;
+ if (Incident_Date > Date_Received or 
+     Incident_Date = . or 
+     Date_Received = . or
+     year(Incident_Date) < 2002 or
+     year(Incident_Date) > 2017 or
+     year(Date_Received) < 2002 or
+     year(Date_Received) > 2017) then Date_Issues="Needs Review";
+run;
+
+*8. Add permanent labels and formats.;
+
+data tsa.prep6;
+ set tsa.prep5;
+format Incident_Date Date_Received date9. Close_Amount Dollar20.2;
+label Airport_Code="Airport Code"
+ Airport_Name="Airport Name"
+ Claim_Number="Claim Number"
+ Claim_Site="Claim Site"
+ Claim_Type="Claim Type"
+ Close_Amount="Close Amount"
+ Date_Issues="Date Issues"
+ Date_Received="Date Received"
+ Incident_Date="Incident Date"
+ Item_Category="Item Category";
+run;
+
+*9. Drop County and City.;
+
+data tsa.Claims_Cleaned;
+ set tsa.prep6;
+ drop County City;
+run;
+
+
+*Analyze & Export;
+*1. Analyze the overall data to answer the business questions. Be sure to add appropriate titles.;
+%let outpath= /home/u41108928;
+options orientation=landscape pdfpageview=FITPAGE nocenter;
+ods pdf file="&outpath/ClaimsReports.pdf" style=Meadow;
+ods proclabel "Enter new procedure title";
+
+title "Overall Date Issues in the Data";
+proc freq data=TSA.Claims_Cleaned;
+ table Date_Issues / nocum nopercent;
+run;
+title;
+ods graphics on;
+title "Overall Claims by Year";
+proc freq data=TSA.Claims_Cleaned;
+ table Incident_Date / nocum nopercent plots=freqplot;
+ format Incident_Date year4.;
+ where Date_Issues is null;
+run;
+title;
+
+*2. Analyze the state-level data to answer the business questions. Be sure to add appropriate titles.;
+
+%let StateName=California;
+title "&StateName Claim Types, Claim Sites and Disposition 
+Frequencies";
+proc freq data=TSA.Claims_Cleaned order=freq;
+ table Claim_Type Claim_Site Disposition / nocum nopercent;
+ where StateName="&StateName" and Date_Issues is null;
+run;
+title "Close_Amount Statistics for &StateName";
+proc means data=TSA.Claims_Cleaned mean min max sum maxdec=0;
+ var Close_Amount;
+ where StateName="&StateName" and Date_Issues is null;
+run;
+title;
+
+ODS PDF CLOSE;
+
